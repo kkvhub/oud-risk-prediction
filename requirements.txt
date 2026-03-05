@@ -7,4 +7,5 @@ pandas
 numpy
 plotly
 fpdf2
-shap
+google-auth
+google-api-python-client
