@@ -4,7 +4,6 @@ import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# Column order must match patients.csv header exactly
 COLUMNS = [
     "patient_id", "admission_date", "treatment_type",
     "age_group", "gender", "race", "state", "veteran",
@@ -23,28 +22,34 @@ SCOPES = [
 
 
 def get_sheets_service():
-    """
-    Build and return authenticated Google Sheets service.
-    Credentials come from Streamlit secrets manager.
-    """
-    creds = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=SCOPES
-    )
-    service = build("sheets", "v4", credentials=creds)
-    return service
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=SCOPES
+        )
+        service = build("sheets", "v4",
+                        credentials=creds,
+                        cache_discovery=False)
+        return service
+    except KeyError:
+        raise KeyError(
+            "gcp_service_account not found in Streamlit secrets. "
+            "Go to App Settings → Secrets and add credentials."
+        )
+    except Exception as e:
+        raise Exception(f"Failed to build Sheets service: {str(e)}")
 
 
 def get_sheet_id():
-    return st.secrets["sheets"]["sheet_id"]
+    try:
+        return st.secrets["sheets"]["sheet_id"]
+    except KeyError:
+        raise KeyError(
+            "sheets.sheet_id not found in Streamlit secrets."
+        )
 
 
 def load_patients():
-    """
-    Load all patient records from Google Sheet.
-    Returns a pandas DataFrame.
-    Returns empty DataFrame if sheet is empty.
-    """
     try:
         service  = get_sheets_service()
         sheet_id = get_sheet_id()
@@ -57,34 +62,25 @@ def load_patients():
         values = result.get("values", [])
 
         if not values or len(values) < 2:
-            # Sheet is empty or only has header
             return pd.DataFrame(columns=COLUMNS)
 
-        # First row is header
         header = values[0]
         rows   = values[1:]
-
-        # Pad short rows to match header length
-        rows = [r + [""] * (len(header) - len(r)) for r in rows]
-
-        df = pd.DataFrame(rows, columns=header)
+        rows   = [r + [""] * (len(header) - len(r)) for r in rows]
+        df     = pd.DataFrame(rows, columns=header)
         return df
 
     except Exception as e:
-        st.error(f"Could not load patient records: {e}")
+        st.error(f"Could not load records: {str(e)}")
         return pd.DataFrame(columns=COLUMNS)
 
 
 def save_patient(patient_dict):
-    """
-    Append one patient record to Google Sheet.
-    If sheet is empty, writes header row first.
-    """
     try:
         service  = get_sheets_service()
         sheet_id = get_sheet_id()
 
-        # Check if header exists
+        # Check if header row exists
         result = service.spreadsheets().values().get(
             spreadsheetId = sheet_id,
             range         = "Sheet1!A1:A1"
@@ -95,27 +91,38 @@ def save_patient(patient_dict):
         # Write header if sheet is empty
         if not existing:
             service.spreadsheets().values().append(
-                spreadsheetId          = sheet_id,
-                range                  = "Sheet1",
-                valueInputOption       = "RAW",
-                insertDataOption       = "INSERT_ROWS",
-                body                   = {"values": [COLUMNS]}
+                spreadsheetId    = sheet_id,
+                range            = "Sheet1",
+                valueInputOption = "RAW",
+                insertDataOption = "INSERT_ROWS",
+                body             = {"values": [COLUMNS]}
             ).execute()
 
         # Build row in correct column order
         row = [str(patient_dict.get(col, "")) for col in COLUMNS]
 
         # Append patient row
-        service.spreadsheets().values().append(
-            spreadsheetId          = sheet_id,
-            range                  = "Sheet1",
-            valueInputOption       = "RAW",
-            insertDataOption       = "INSERT_ROWS",
-            body                   = {"values": [row]}
+        result = service.spreadsheets().values().append(
+            spreadsheetId    = sheet_id,
+            range            = "Sheet1",
+            valueInputOption = "RAW",
+            insertDataOption = "INSERT_ROWS",
+            body             = {"values": [row]}
         ).execute()
 
-        return True
+        # Confirm rows were updated
+        updates = result.get("updates", {})
+        updated = updates.get("updatedRows", 0)
+
+        if updated > 0:
+            return True
+        else:
+            st.warning(
+                "Sheets API responded but reported 0 rows updated. "
+                "Check sheet permissions."
+            )
+            return False
 
     except Exception as e:
-        st.error(f"Could not save patient record: {e}")
+        st.error(f"Save error: {str(e)}")
         return False
