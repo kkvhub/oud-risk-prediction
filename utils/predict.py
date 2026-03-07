@@ -1,15 +1,14 @@
 # utils/predict.py
 import json
 import numpy as np
-import pandas as pd
 import os
 
-# Cached loaded assets
 _params = None
 _model  = None
 
+# Match EXACTLY what is in preprocessor_params.json
 NOMINAL_COLS = ["EMPLOY","ETHNIC","LIVARAG","MARSTAT","PSOURCE",
-                "RACE","REGION","SERVICES","STFIPS","PRIMPAY","PRIMINC"]
+                "RACE","REGION","SERVICES","STFIPS"]
 ORDINAL_COLS = ["ARRESTS","EDUC","FREQMAX","AGECAT","NUMSUBS"]
 BINARY_COLS  = ["ALCFLG","MARFLG","INHFLG","NOPRIOR","PSYPROB",
                 "VET","GENDER","NEEDLEUSE","STIMFLAG","TRNQFLAG",
@@ -34,12 +33,10 @@ def _load_assets():
 
     if not os.path.exists(params_path):
         raise FileNotFoundError(
-            "preprocessor_params.json not found at: " + params_path
-        )
+            "preprocessor_params.json not found at: " + params_path)
     if not os.path.exists(model_path):
         raise FileNotFoundError(
-            "final_nn.keras not found at: " + model_path
-        )
+            "final_nn.keras not found at: " + model_path)
 
     with open(params_path, "r") as f:
         _params = json.load(f)
@@ -51,42 +48,47 @@ def _load_assets():
 def _transform(patient_dict):
     """
     Manually apply preprocessing using stored JSON parameters.
-    No pickle, no sklearn version dependency.
+    No pickle — works on any Python version.
     """
+    # Nominal — one-hot encode each column
     nominal_out = []
     for col in NOMINAL_COLS:
         val  = patient_dict.get(col, None)
         fill = _params["nominal_fill"][col]
         val  = fill if (val is None or (
-                        isinstance(val, float) and np.isnan(val))
-                        ) else val
+                        isinstance(val, float) and
+                        __import__("math").isnan(val))) else val
         cats = _params["ohe_categories"][col]
-        ohe  = [1.0 if (str(val) == str(c) or val == c) else 0.0
-                for c in cats]
+        ohe  = [1.0 if (str(val) == str(c) or val == c)
+                else 0.0 for c in cats]
         nominal_out.extend(ohe)
 
+    # Ordinal — impute then scale
     ordinal_out = []
     for col in ORDINAL_COLS:
         val  = patient_dict.get(col, None)
         fill = _params["ordinal_fill"][col]
         val  = fill if (val is None or (
-                        isinstance(val, float) and np.isnan(val))
-                        ) else val
+                        isinstance(val, float) and
+                        __import__("math").isnan(val))) else val
         scaled = ((float(val) - _params["ordinal_mean"][col])
                   / _params["ordinal_std"][col])
         ordinal_out.append(scaled)
 
+    # Binary — impute only
     binary_out = []
     for col in BINARY_COLS:
         val  = patient_dict.get(col, None)
         fill = _params["binary_fill"][col]
         val  = fill if (val is None or (
-                        isinstance(val, float) and np.isnan(val))
-                        ) else val
+                        isinstance(val, float) and
+                        __import__("math").isnan(val))) else val
         binary_out.append(float(val))
 
-    return np.array(nominal_out + ordinal_out + binary_out,
-                    dtype=np.float32).reshape(1, -1)
+    return np.array(
+        nominal_out + ordinal_out + binary_out,
+        dtype=np.float32
+    ).reshape(1, -1)
 
 
 def get_risk_level(score):
